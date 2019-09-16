@@ -1,0 +1,116 @@
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.DelayQueue;
+import java.util.concurrent.Delayed;
+import java.util.concurrent.TimeUnit;
+public class MLDNTestDemo {
+    public static void main(String[] args) throws Exception {
+        Cache<String,News> cache = new Cache<String,News>() ;
+        cache.put("小岳岳",new News("小岳岳","跑路了
+                "),3,TimeUnit.SECONDS) ;
+                cache.put("小瘋馮",new News("小瘋馮","吃屎了
+                        "),3,TimeUnit.SECONDS) ;
+                        System.out.println(cache.get("小岳岳"));
+        TimeUnit.SECONDS.sleep(5);
+        System.out.println(cache.get("小岳岳"));
+        System.out.println(cache.get("小瘋馮"));
+    }
+}
+// // 定義緩存的操作類，該類之中需要用戶設置保存的key類型與value類型
+class Cache<K,V> {
+    // 如果要想實現多個線程的並發訪問操作，必須要考慮使用ConcurrentHashMap子類
+    private ConcurrentMap<K, V> cacheObjectMap = new ConcurrentHashMap<K, V>();
+    private DelayQueue<DelayItem<Pair>> delayQueue = new DelayQueue<DelayItem<Pair>>() ;
+    private class Pair {   // 定義一個內部類，該類可以保存隊列之中的K與V類型
+        private K key ;
+        private V value ;
+        public Pair(K key,V value) {
+            this.key = key ;
+            this.value = value ;
+        }
+    }
+    // 如果要想清空不需要的緩衝數據，則需要守護線程
+    public Cache() {
+        Runnable daemonTask = () -> {
+            // 守護線程要一直進行執行，當已經超時之後可以取出數據
+            while(true) {
+                // 通過延遲隊列獲取數據
+                DelayItem<Pair> item =
+                        Cache.this.delayQueue.poll() ;
+                // 已經有數據超時了
+                if (item != null) {
+                    Pair pair = item.getItem() ;
+                    Cache.this.cacheObjectMap.remove(
+                            pair.key, pair.value) ;
+                }
+            }
+        } ;
+        Thread thread = new Thread(daemonTask,"緩存守護線程") ;
+        // 設置守護線程
+        thread.setDaemon(true);
+        // 啟動守護線程
+        thread.start();
+    }
+    /**
+     * 表示將要保存的數據寫入到緩存之中，如果一個對象重複被保存了，則應該重置它的超時時間
+     * @param key 要寫入的K的內容
+     * @param value 要寫入的對象
+     * @param time 保存的時間
+     * @param unit 保存的時間單位
+     */
+    public void put(K key, V value, long time, TimeUnit unit) {
+        // put()方法如果發現原本的key存在，
+        則會用新的value替換掉舊的內容，同時返回舊的內容
+        // 將數據保存進去
+        V oldValue = this.cacheObjectMap.put(key, value) ;
+        // 原本已經存儲過此內容了
+        if (oldValue != null) {
+            this.delayQueue.remove(key) ;
+        }
+        this.delayQueue.put(new DelayItem<Pair>(
+                new Pair(key,value), time, unit));
+    }
+    // 根據key獲取內容
+    public V get(K key) {
+        // Map負責查詢
+        return this.cacheObjectMap.get(key) ;
+    }
+}
+
+class DelayItem<T> implements Delayed {
+    private T item ;   // 設置要保存的數據內容
+    private long delay ;   // 保存緩存的時間
+    private long expire ;  // 設置緩存數據的失效時間
+    public DelayItem(T item,long delay,TimeUnit unit) {
+        this.item = item ;
+        this.delay = TimeUnit.MILLISECONDS.convert(delay, unit) ;
+        this.expire = System.currentTimeMillis() + this.delay ;
+    }
+    @Override
+    public int compareTo(Delayed o) {
+        return (int) (this.delay –
+        this.getDelay(TimeUnit.MILLISECONDS));
+    }
+    @Override
+    public long getDelay(TimeUnit unit) {
+        return unit.convert(this.expire
+                        - System.currentTimeMillis(),
+                TimeUnit.MILLISECONDS);
+    }
+    public T getItem() {
+        return item;
+    }
+}
+
+class News {   // 定義一個新聞類
+    private String title ;
+    private String note ;
+    public News(String title,String note) {
+        this.title = title ;
+        this.note = note ;
+    }
+    public String toString() {
+        return "【新聞數據】title = " + this.title
+                + "、note = " + this.note ;
+    }
+}
